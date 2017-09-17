@@ -12,9 +12,15 @@
 
 'use strict';
 
+var AWSXRay = require('aws-xray-sdk');
+AWSXRay.captureHTTPsGlobal(require('http'));
 
 const Alexa = require('alexa-sdk');
 const questions = require('./question');
+
+const Nexmo = require('nexmo');
+//const Nexmo = AWSXRay.captureHTTPsGlobal(require('nexmo'));
+
 
 const ANSWER_COUNT = 2; // The number of possible answers per trivia question.
 const GAME_LENGTH = 1;  // The number of questions per trivia game.
@@ -35,7 +41,7 @@ const languageString = {
             'QUESTIONS': questions['QUESTIONS_EN_US'],
             'GAME_NAME': 'Myth Quiz', // Be sure to change this for your skill.
             'HELP_MESSAGE': 'I will ask you %s multiple choice questions. Respond with the number of the answer. ' +
-                'For example, say one, two, three, or four. To start a new game at any time, say, start game. ',
+                'For example, say one, two, or three. ',
             'REPEAT_QUESTION_MESSAGE': 'To repeat the last question, say, repeat. ',
             'ASK_MESSAGE_START': 'Would you like to start playing?',
             'HELP_REPROMPT': 'To give an answer to a question, respond with the number of the answer. ',
@@ -53,7 +59,8 @@ const languageString = {
             'CORRECT_ANSWER_MESSAGE': 'The correct answer is %s: %s. ',
             'ANSWER_IS_MESSAGE': 'That answer is ',
             'TELL_QUESTION_MESSAGE': 'Question %s. %s ',
-            'GAME_OVER_MESSAGE': 'You got %s out of %s questions correct. Thank you for playing!',
+            'GAME_OVER_MESSAGE_LOSE': 'You got %s out of %s questions correct. Please try again next time!',
+            'GAME_OVER_MESSAGE_WIN': 'You got all questions correct. Will send you a coupon shortly!',
             'SCORE_IS_MESSAGE': 'Your score is %s. ',
             'SMS_SENT_MESSAGE': 'SMS sent to %s',
         },
@@ -123,29 +130,45 @@ const newSessionHandlers = {
 /**
   Send SMS
 */
-function sendSMS(toNumber){
+function sendSMS(){
 
-  var Nexmo = require('nexmo');
+  //var Nexmo = require('nexmo');
 
   var nexmo = new Nexmo({
     //apiKey: 'API_KEY',
     //apiSecret: 'API_SECRET',
 
-    apiKey: '3382a98e',
-    apiSecret: '35c0eefbec927ab6',
+    //apiKey: '3382a98e',
+    //apiSecret: '35c0eefbec927ab6',
+
+    apiKey: process.env.NEXMO_API_KEY,
+    apiSecret: process.env.NEXMO_APISECRET,
+  }, {
+    debug: true,
   });
 
   //var from = 'Nexmo';
-  var from = '12016728823';
+  //var from = '12016728823';
+  var from = process.env.FROM_NUMBER;
   //var to = 'TO_NUMBER';
   //var to = '14084802818';
-  //var to = '18645028338';
+  //var to = '14436171959';
+  //var to = '13055028338';
   var to = process.env.TO_NUMBER;
-  var text = 'You win!';
+  var text = "You beat Myth Quiz! Here is the code to redeem pizza from Johnny's Pizza - 789A632. ";
 
-  nexmo.message.sendSms(from, to, text);
+  try {
+    nexmo.message.sendSms(from, to, text);
+    setTimeout(function() { this.emit(':responseReady'); }, 8000);
+
+  } catch (e) {
+    console.log(e);
+  }
+
 
   console.log( "Sent SMS to %s", to );
+
+  return;
 }
 
 function populateGameQuestions(translatedQuestions) {
@@ -242,13 +265,24 @@ function handleUserGuess(userGaveUp) {
     // Check if we can exit the game session after GAME_LENGTH questions (zero-indexed)
     if (this.attributes['currentQuestionIndex'] === GAME_LENGTH - 1) {
 
-        sendSMS();
 
         speechOutput = userGaveUp ? '' : this.t('ANSWER_IS_MESSAGE');
-        speechOutput += speechOutputAnalysis + this.t('GAME_OVER_MESSAGE', currentScore.toString(), GAME_LENGTH.toString());
 
-        this.response.speak(speechOutput);
-        this.emit(':responseReady');
+        if( currentScore == GAME_LENGTH){
+          speechOutput += speechOutputAnalysis + this.t('GAME_OVER_MESSAGE_WIN');
+          console.log('Winning sending SMS.')
+          this.response.speak(speechOutput);
+          sendSMS();
+        }else {
+          speechOutput += speechOutputAnalysis + this.t('GAME_OVER_MESSAGE_LOSE', currentScore.toString(), GAME_LENGTH.toString());
+          this.response.speak(speechOutput);
+          this.emit(':responseReady');
+        }
+
+
+
+
+
     } else {
         currentQuestionIndex += 1;
         correctAnswerIndex = Math.floor(Math.random() * (ANSWER_COUNT));
@@ -284,8 +318,6 @@ const startStateHandlers = Alexa.CreateStateHandler(GAME_STATES.START, {
     'StartGame': function (newGame) {
 
         console.log('Start Game');
-
-        sendSMS();
 
         let speechOutput = newGame ? this.t('NEW_GAME_MESSAGE', this.t('GAME_NAME')) + this.t('WELCOME_MESSAGE', GAME_LENGTH.toString()) : '';
         // Select GAME_LENGTH questions for the game
@@ -327,6 +359,10 @@ const startStateHandlers = Alexa.CreateStateHandler(GAME_STATES.START, {
 const triviaStateHandlers = Alexa.CreateStateHandler(GAME_STATES.TRIVIA, {
     'AnswerIntent': function () {
         handleUserGuess.call(this, false);
+        this.emit(':responseReady');
+    },
+    'SMSIntent': function () {
+        sendSMS();
     },
     'DontKnowIntent': function () {
         handleUserGuess.call(this, true);
